@@ -66,7 +66,7 @@ class SDVideoPipeline(torch.nn.Module):
     def __init__(self, device="cuda", torch_dtype=torch.float16, use_animatediff=True):
         super().__init__()
         self.scheduler = EnhancedDDIMScheduler(beta_schedule="linear" if use_animatediff else "scaled_linear")
-        self.prompter = SDPrompter()
+        self.prompter = SDPrompter()    # CLIP text encoder
         self.device = device
         self.torch_dtype = torch_dtype
         # models
@@ -175,6 +175,7 @@ class SDVideoPipeline(torch.nn.Module):
         progress_bar_cmd=tqdm,
         progress_bar_st=None,
     ):
+        # Todo 用 ip-adapter-plus-face_sd15 控制面部的一致性 换成米哈游LoRA 改prompt变成某个角色跳舞 Bocchi from Gotoh Hitori the Rock | Goofy Ai 提取poser
         # Prepare scheduler
         self.scheduler.set_timesteps(num_inference_steps, denoising_strength)
 
@@ -186,10 +187,10 @@ class SDVideoPipeline(torch.nn.Module):
         if input_frames is None or denoising_strength == 1.0:
             latents = noise
         else:
-            latents = self.encode_images(input_frames)
+            latents = self.encode_images(input_frames)  # 用VAE编码
             latents = self.scheduler.add_noise(latents, noise, timestep=self.scheduler.timesteps[0])
 
-        # Encode prompts
+        # Encode prompts  CLIP text encoder编码
         prompt_emb_posi = self.prompter.encode_prompt(self.text_encoder, prompt, clip_skip=clip_skip, device=self.device, positive=True).cpu()
         prompt_emb_nega = self.prompter.encode_prompt(self.text_encoder, negative_prompt, clip_skip=clip_skip, device=self.device, positive=False).cpu()
         prompt_emb_posi = prompt_emb_posi.repeat(num_frames, 1, 1)
@@ -199,7 +200,7 @@ class SDVideoPipeline(torch.nn.Module):
         if controlnet_frames is not None:
             if isinstance(controlnet_frames[0], list):
                 controlnet_frames_ = []
-                for processor_id in range(len(controlnet_frames)):
+                for processor_id in range(len(controlnet_frames)):  # 2种controlnet处理2种frame
                     controlnet_frames_.append(
                         torch.stack([
                             self.controlnet.process_image(controlnet_frame, processor_id=processor_id).to(self.torch_dtype)
@@ -212,7 +213,8 @@ class SDVideoPipeline(torch.nn.Module):
                     self.controlnet.process_image(controlnet_frame).to(self.torch_dtype)
                     for controlnet_frame in progress_bar_cmd(controlnet_frames)
                 ], dim=1)
-        
+        print('controlnet_frames.shape',controlnet_frames.shape)
+        exit()
         # Denoise
         for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
             timestep = torch.IntTensor((timestep,))[0].to(self.device)

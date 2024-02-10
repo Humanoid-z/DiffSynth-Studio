@@ -17,7 +17,7 @@ config = {
         "model_list": [
             "models/stable_diffusion/aingdiffusion_v12.safetensors",
             "models/AnimateDiff/mm_sd_v15_v2.ckpt",
-            "models/ControlNet/control_v11f1e_sd15_tile.pth",
+            "models/ControlNet/control_v11f1e_sd15_tile.pth",   #补全细节的controlnet
             "models/ControlNet/control_v11p_sd15_lineart.pth"
         ],
         "textual_inversion_folder": "models/textual_inversion",
