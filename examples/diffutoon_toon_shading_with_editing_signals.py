@@ -15,7 +15,7 @@ import os
 # `models/Annotators/sk_model2.pth`: [link](https://huggingface.co/lllyasviel/Annotators/resolve/main/sk_model2.pth)
 # `models/textual_inversion/verybadimagenegative_v1.3.pt`: [link](https://civitai.com/api/download/models/25820?type=Model&format=PickleTensor&size=full&fp=fp16)
 
-# The original video in the example is https://www.bilibili.com/video/BV1zu4y1s7Ec/.
+# The original video in the examples is https://www.bilibili.com/video/BV1zu4y1s7Ec/.
 
 config_stage_1 = {
     "models": {
