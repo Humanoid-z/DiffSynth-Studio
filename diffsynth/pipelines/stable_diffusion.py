@@ -48,7 +48,10 @@ class SDImagePipeline(torch.nn.Module):
     def fetch_prompter(self, model_manager: ModelManager):
         self.prompter.load_from_model_manager(model_manager)
 
-
+    def fetch_ip_adapter(self, model_manager: ModelManager):
+        self.clip_image_processor = model_manager.clip_image_processor
+        self.image_encoder = model_manager.image_encoder
+        self.image_projector = model_manager.image_projector
     @staticmethod
     def from_model_manager(model_manager: ModelManager, controlnet_config_units: List[ControlNetConfigUnit]=[]):
         pipe = SDImagePipeline(
@@ -58,6 +61,8 @@ class SDImagePipeline(torch.nn.Module):
         pipe.fetch_main_models(model_manager)
         pipe.fetch_prompter(model_manager)
         pipe.fetch_controlnet_models(model_manager, controlnet_config_units)
+        if 'ip_adapter' in model_manager.model:
+            pipe.fetch_ip_adapter(model_manager)
         return pipe
     
 
@@ -71,8 +76,20 @@ class SDImagePipeline(torch.nn.Module):
         image = image.cpu().permute(1, 2, 0).numpy()
         image = Image.fromarray(((image / 2 + 0.5).clip(0, 1) * 255).astype("uint8"))
         return image
-    
 
+    @torch.inference_mode()
+    def get_image_embeds(self, pil_image=None):
+        if isinstance(pil_image, Image.Image):
+            pil_image = [pil_image]
+        clip_image = self.clip_image_processor(images=pil_image, return_tensors="pt").pixel_values
+        clip_image = clip_image.to(self.device, dtype=self.torch_dtype)
+        clip_image_embeds = self.image_encoder(clip_image, output_hidden_states=True).hidden_states[-2]
+        image_prompt_embeds = self.image_projector(clip_image_embeds)
+        uncond_clip_image_embeds = self.image_encoder(
+            torch.zeros_like(clip_image), output_hidden_states=True
+        ).hidden_states[-2]
+        uncond_image_prompt_embeds = self.image_projector(uncond_clip_image_embeds)
+        return image_prompt_embeds, uncond_image_prompt_embeds
     @torch.no_grad()
     def __call__(
         self,
@@ -91,6 +108,7 @@ class SDImagePipeline(torch.nn.Module):
         tile_stride=32,
         progress_bar_cmd=tqdm,
         progress_bar_st=None,
+        ip_adapter_image=None
     ):
         # Prepare scheduler
         self.scheduler.set_timesteps(num_inference_steps, denoising_strength)
@@ -108,6 +126,10 @@ class SDImagePipeline(torch.nn.Module):
         prompt_emb_posi = self.prompter.encode_prompt(self.text_encoder, prompt, clip_skip=clip_skip, device=self.device, positive=True)
         prompt_emb_nega = self.prompter.encode_prompt(self.text_encoder, negative_prompt, clip_skip=clip_skip, device=self.device, positive=False)
 
+        if ip_adapter_image is not None:
+            image_embeds,negative_image_embeds = self.get_image_embeds(ip_adapter_image) # 注意shape
+            prompt_emb_posi = (prompt_emb_posi, image_embeds)
+            prompt_emb_nega = (prompt_emb_nega, negative_image_embeds)
         # Prepare ControlNets
         if controlnet_image is not None:
             controlnet_image = self.controlnet.process_image(controlnet_image).to(device=self.device, dtype=self.torch_dtype)

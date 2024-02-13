@@ -1,13 +1,12 @@
 import requests
 import os
-os.environ['CURL_CA_BUNDLE'] = ''
 
 def download_model(url, file_path):
   proxies = {
     'http': 'http://localhost:7890',
     'https': 'https://localhost:7890',
   }
-  model_file = requests.get(url, allow_redirects=True,proxies=proxies,verify=False)
+  model_file = requests.get(url, allow_redirects=True,verify=False)
   with open(file_path, "wb") as f:
     f.write(model_file.content)
   print(file_path+' downloaded')
@@ -25,4 +24,6 @@ def download_model(url, file_path):
 # download_model("https://civitai.com/api/download/models/25820?type=Model&format=PickleTensor&size=full&fp=fp16", "models/textual_inversion/verybadimagenegative_v1.3.pt")
 
 
-download_model("https://civitai.com/api/download/models/66246", "models/lora/bocchi_style_offset.safetensors")
+# download_model("https://civitai.com/api/download/models/66246", "models/lora/bocchi_style_offset.safetensors")
+download_model("http://hf-mirror.com/h94/IP-Adapter/blob/main/models/image_encoder/model.safetensors", "models/CLIPImageEncoder/model.safetensors")
+download_model("http://hf-mirror.com/h94/IP-Adapter/blob/main/models/image_encoder/config.json", "models/CLIPImageEncoder/config.json")

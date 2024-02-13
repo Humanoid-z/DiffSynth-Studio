@@ -17,11 +17,13 @@ from diffsynth import SDVideoPipelineRunner
 config = {
     "models": {
         "model_list": [
-            "models/stable_diffusion/aingdiffusion_v12.safetensors",
+            # "models/stable_diffusion/aingdiffusion_v12.safetensors",
+            "models/stable_diffusion/v1-5-pruned-emaonly.safetensors",
             "models/AnimateDiff/mm_sd_v15_v2.ckpt",
             "models/ControlNet/control_v11p_sd15_openpose.pth",
             # "models/ControlNet/control_v11f1e_sd15_tile.pth",   #补全细节的controlnet
             "models/ControlNet/control_v11p_sd15_lineart.pth",
+            "models/Adapter/ip-adapter-plus_sd15.safetensors"
             # "models/lora/keqing_lion_optimizer_dim64_loraModel_5e-3noise_token1_4-3-2023.safetensors"
         #     https://civitai.com/models/15699/keqing-or-genshin-impact-or-3in1-lora-and-locon
         ],
@@ -32,18 +34,18 @@ config = {
             {
                 "processor_id": "openpose",
                 "model_path": "models/ControlNet/control_v11p_sd15_openpose.pth",
-                "scale": 0.5
+                "scale": 0.4
             },
             # {
             #     "processor_id": "tile",
             #     "model_path": "models/ControlNet/control_v11f1e_sd15_tile.pth",
             #     "scale": 0.3
             # },
-            {
-                "processor_id": "lineart",
-                "model_path": "models/ControlNet/control_v11p_sd15_lineart.pth",
-                "scale": 0.5
-            }
+            # {
+            #     "processor_id": "lineart",
+            #     "model_path": "models/ControlNet/control_v11p_sd15_lineart.pth",
+            #     "scale": 0.1
+            # }
         ]
     },
     # "smoother_configs": [
@@ -59,8 +61,9 @@ config = {
             "height": 1024,
             "width": 512,
             "start_frame_id": 0,    # [start_frame_id,end_frame_id)
-            "end_frame_id": 30
+            "end_frame_id": 60
         },
+        'ip_adapter_image':'data/examples/example.jpg',
         "controlnet_frames": [
             {
                 "video_file": "data/examples/diffutoon/input_video.mp4",
@@ -68,16 +71,16 @@ config = {
                 "height": 1024,
                 "width": 512,
                 "start_frame_id": 0,
-                "end_frame_id": 30
+                "end_frame_id": 60
             },
-            {
-                "video_file": "data/examples/diffutoon/input_video.mp4",
-                "image_folder": None,
-                "height": 1024,
-                "width": 512,
-                "start_frame_id": 0,
-                "end_frame_id": 30
-            }
+            # {
+            #     "video_file": "data/examples/diffutoon/input_video.mp4",
+            #     "image_folder": None,
+            #     "height": 1024,
+            #     "width": 512,
+            #     "start_frame_id": 0,
+            #     "end_frame_id": 60
+            # }
         ],
         "output_folder": "data/examples/diffutoon/output",
         "fps": 30
@@ -85,15 +88,15 @@ config = {
     "pipeline": {
         "seed": 0,
         "pipeline_inputs": {
-            "prompt": "keqing (genshin impact), keqing is dancing, smile, solo, best quality",
+            "prompt": "best quality, light, a girl is dancing, smile, solo",
             # best quality, perfect anime illustration, light, a girl is dancing, smile, solo
             "negative_prompt": "verybadimagenegative_v1.3",
-            "cfg_scale": 7.0,   #7.0
+            "cfg_scale": 7.5,   #7.0
             "clip_skip": 2,
             "denoising_strength": 1.0,
             "num_inference_steps": 10,
-            "animatediff_batch_size": 16,
-            "animatediff_stride": 8,
+            "animatediff_batch_size": 16,   #16
+            "animatediff_stride": 8,   # 8
             "unet_batch_size": 1,
             "controlnet_batch_size": 1,
             "cross_frame_attention": False,

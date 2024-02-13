@@ -3,3 +3,11 @@ data/*
 models/*
 .idea/*
 
+*/__pycache__/*
+diffsynth/controlnets/__pycache__/*
+diffsynth/data/__pycache__/*
+diffsynth/models/__pycache__/*
+diffsynth/pipelines/__pycache__/*
+diffsynth/processors/__pycache__/*
+diffsynth/schedulers/__pycache__/*
+diffsynth/prompts/__pycache__/*

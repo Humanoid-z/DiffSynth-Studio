@@ -1,3 +1,7 @@
+
+from diffusers.loaders import IPAdapterMixin
+from diffusers.models import ImageProjection
+
 from ..models import ModelManager, SDTextEncoder, SDUNet, SDVAEDecoder, SDVAEEncoder, SDMotionModel
 from ..controlnets import MultiControlNetManager, ControlNetUnit, ControlNetConfigUnit, Annotator
 from ..prompts import SDPrompter
@@ -32,14 +36,23 @@ def lets_dance_with_long_video(
     hidden_states_output = [(torch.zeros(sample[0].shape, dtype=sample[0].dtype), 0) for i in range(num_frames)]
 
     for batch_id in range(0, num_frames, animatediff_stride):
-        batch_id_ = min(batch_id + animatediff_batch_size, num_frames)
+        batch_id_ = min(batch_id + animatediff_batch_size, num_frames)  # 滑动窗口右界
+        if isinstance(encoder_hidden_states, tuple):    # for ip_hidden_states
+            text_hidden_states, ip_hidden_states = encoder_hidden_states
+            current_encoder_hidden_states = (
+                text_hidden_states[batch_id: batch_id_].to(device),
+                ip_hidden_states[batch_id: batch_id_].to(device)
+            )
+        else:
+            current_encoder_hidden_states = encoder_hidden_states[batch_id: batch_id_].to(device)
 
+        # print('current_encoder_hidden_states type is',type(current_encoder_hidden_states))
         # process this batch
         hidden_states_batch = lets_dance(
             unet, motion_modules, controlnet,
             sample[batch_id: batch_id_].to(device),
             timestep,
-            encoder_hidden_states[batch_id: batch_id_].to(device),
+            current_encoder_hidden_states,
             controlnet_frames[:, batch_id: batch_id_].to(device) if controlnet_frames is not None else None,
             unet_batch_size=unet_batch_size, controlnet_batch_size=controlnet_batch_size,
             cross_frame_attention=cross_frame_attention,
@@ -47,10 +60,14 @@ def lets_dance_with_long_video(
         ).cpu()
 
         # update hidden_states
+        # 平滑化
         for i, hidden_states_updated in zip(range(batch_id, batch_id_), hidden_states_batch):
             bias = max(1 - abs(i - (batch_id + batch_id_ - 1) / 2) / ((batch_id_ - batch_id - 1 + 1e-2) / 2), 1e-2)
+
             hidden_states, num = hidden_states_output[i]
             hidden_states = hidden_states * (num / (num + bias)) + hidden_states_updated * (bias / (num + bias))
+            # print('left b:',batch_id,' right b:',batch_id_,' i:',i)
+            # print('bias:', bias,' num:',' hist weight:',(num / (num + bias)),' new weight:',(bias / (num + bias)))
             hidden_states_output[i] = (hidden_states, num + bias)
 
         if batch_id_ == num_frames:
@@ -84,6 +101,10 @@ class SDVideoPipeline(torch.nn.Module):
         self.vae_decoder = model_manager.vae_decoder
         self.vae_encoder = model_manager.vae_encoder
 
+    def fetch_ip_adapter(self, model_manager: ModelManager):
+        self.clip_image_processor = model_manager.clip_image_processor
+        self.image_encoder = model_manager.image_encoder
+        self.image_projector = model_manager.image_projector
 
     def fetch_controlnet_models(self, model_manager: ModelManager, controlnet_config_units: List[ControlNetConfigUnit]=[]):
         controlnet_units = []
@@ -117,6 +138,8 @@ class SDVideoPipeline(torch.nn.Module):
         pipe.fetch_motion_modules(model_manager)
         pipe.fetch_prompter(model_manager)
         pipe.fetch_controlnet_models(model_manager, controlnet_config_units)
+        if 'ip_adapter' in model_manager.model:
+            pipe.fetch_ip_adapter(model_manager)
         return pipe
     
 
@@ -148,7 +171,22 @@ class SDVideoPipeline(torch.nn.Module):
             latents.append(latent)
         latents = torch.concat(latents, dim=0)
         return latents
-    
+
+    # Copied from https://github.com/tencent-ailab/IP-Adapter/blob/main/ip_adapter/ip_adapter.py#L320
+    # Only for IP-Adapter plus now
+    @torch.inference_mode()
+    def get_image_embeds(self, pil_image=None):
+        if isinstance(pil_image, Image.Image):
+            pil_image = [pil_image.resize((1024, 1024))]
+        clip_image = self.clip_image_processor(images=pil_image, return_tensors="pt").pixel_values
+        clip_image = clip_image.to(self.device, dtype=torch.float16)
+        clip_image_embeds = self.image_encoder(clip_image, output_hidden_states=True).hidden_states[-2]
+        image_prompt_embeds = self.image_projector(clip_image_embeds)
+        uncond_clip_image_embeds = self.image_encoder(
+            torch.zeros_like(clip_image), output_hidden_states=True
+        ).hidden_states[-2]
+        uncond_image_prompt_embeds = self.image_projector(uncond_clip_image_embeds)
+        return image_prompt_embeds, uncond_image_prompt_embeds
 
     @torch.no_grad()
     def __call__(
@@ -174,7 +212,9 @@ class SDVideoPipeline(torch.nn.Module):
         vram_limit_level=0,
         progress_bar_cmd=tqdm,
         progress_bar_st=None,
+        ip_adapter_image=None,
     ):
+
         # Todo 用 ip-adapter-plus-face_sd15 控制面部的一致性 换成米哈游LoRA 改prompt变成某个角色跳舞 Bocchi from Gotoh Hitori the Rock | Goofy Ai 提取poser
         # Prepare scheduler
         self.scheduler.set_timesteps(num_inference_steps, denoising_strength)
@@ -185,17 +225,30 @@ class SDVideoPipeline(torch.nn.Module):
         else:
             noise = torch.randn((num_frames, 4, height//8, width//8), device="cpu", dtype=self.torch_dtype)
         if input_frames is None or denoising_strength == 1.0:
-            latents = noise
+            latents = noise # 完全用noise
         else:
             latents = self.encode_images(input_frames)  # 用VAE编码
             latents = self.scheduler.add_noise(latents, noise, timestep=self.scheduler.timesteps[0])
-
+        #latents.shape [30 (frame), 4(vae channel), 128(height//8), 128(width//8)]
         # Encode prompts  CLIP text encoder编码
+
+
+
+        print(prompt)
         prompt_emb_posi = self.prompter.encode_prompt(self.text_encoder, prompt, clip_skip=clip_skip, device=self.device, positive=True).cpu()
         prompt_emb_nega = self.prompter.encode_prompt(self.text_encoder, negative_prompt, clip_skip=clip_skip, device=self.device, positive=False).cpu()
         prompt_emb_posi = prompt_emb_posi.repeat(num_frames, 1, 1)
         prompt_emb_nega = prompt_emb_nega.repeat(num_frames, 1, 1)
 
+        # For IP-Adapter
+        if ip_adapter_image is not None:
+            ip_adapter_image = Image.open(ip_adapter_image)
+            image_embeds,negative_image_embeds = self.get_image_embeds(ip_adapter_image) # 注意shape
+            image_embeds = image_embeds.repeat(num_frames, 1, 1)
+            negative_image_embeds = negative_image_embeds.repeat(num_frames, 1, 1)
+            prompt_emb_posi = (prompt_emb_posi, image_embeds)
+            prompt_emb_nega = (prompt_emb_nega, negative_image_embeds)
+        # prompt_emb.shape [30(frame), 77(token truncat to 77 length), 768 (clip emb dim)]
         # Prepare ControlNets
         if controlnet_frames is not None:
             if isinstance(controlnet_frames[0], list):
@@ -213,8 +266,9 @@ class SDVideoPipeline(torch.nn.Module):
                     self.controlnet.process_image(controlnet_frame).to(self.torch_dtype)
                     for controlnet_frame in progress_bar_cmd(controlnet_frames)
                 ], dim=1)
+        # controlnet_frames.shape torch.Size([2 (2 signal), 30(frames), 3(c), 1024(height), 1024(width)])
         print('controlnet_frames.shape',controlnet_frames.shape)
-        exit()
+        # exit()
         # Denoise
         for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
             timestep = torch.IntTensor((timestep,))[0].to(self.device)
@@ -237,7 +291,7 @@ class SDVideoPipeline(torch.nn.Module):
                 device=self.device, vram_limit_level=vram_limit_level
             )
             noise_pred = noise_pred_nega + cfg_scale * (noise_pred_posi - noise_pred_nega)
-
+            #self.scheduler.timesteps: [999, 888, 777, 666, 555, 444, 333, 222, 111, 0]
             # DDIM and smoother
             if smoother is not None and progress_id in smoother_progress_ids:
                 rendered_frames = self.scheduler.step(noise_pred, timestep, latents, to_final=True)
@@ -280,8 +334,10 @@ class SDVideoPipelineRunner:
                     model_path=unit["model_path"],
                     scale=unit["scale"]
                 ) for unit in controlnet_units
-            ]
+            ],
         )
+        # load IP-adapter
+        # pipe.set_ip_adapter_scale(0.6)
         return model_manager, pipe
     
 
@@ -317,6 +373,9 @@ class SDVideoPipelineRunner:
         pipeline_inputs["input_frames"] = self.load_video(**data["input_frames"])
         pipeline_inputs["num_frames"] = len(pipeline_inputs["input_frames"])
         pipeline_inputs["width"], pipeline_inputs["height"] = pipeline_inputs["input_frames"][0].size
+        if 'ip_adapter_image' in data:
+            pipeline_inputs['ip_adapter_image'] = data["ip_adapter_image"]
+            print('load ip_adapter_image:',data["ip_adapter_image"])
         if len(data["controlnet_frames"]) > 0:
             pipeline_inputs["controlnet_frames"] = [self.load_video(**unit) for unit in data["controlnet_frames"]]
         return pipeline_inputs
@@ -341,6 +400,7 @@ class SDVideoPipelineRunner:
         if self.in_streamlit: st.markdown("Loading models ...")
         model_manager, pipe = self.load_pipeline(**config["models"])
         if self.in_streamlit: st.markdown("Loading models ... done!")
+
         if "smoother_configs" in config:
             if self.in_streamlit: st.markdown("Loading smoother ...")
             smoother = self.load_smoother(model_manager, config["smoother_configs"])

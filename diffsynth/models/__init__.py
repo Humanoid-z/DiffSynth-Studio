@@ -1,5 +1,8 @@
 import torch, os
+from diffusers.models import ImageProjection
+from diffusers.models.embeddings import IPAdapterFullImageProjection, IPAdapterPlusImageProjection
 from safetensors import safe_open
+from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
 
 from .sd_text_encoder import SDTextEncoder
 from .sd_unet import SDUNet
@@ -58,7 +61,9 @@ class ModelManager:
     def is_translator(self, state_dict):
         param_name = "model.encoder.layers.5.self_attn_layer_norm.weight"
         return param_name in state_dict and len(state_dict) == 254
-    
+    def is_ip_adapter(self, state_dict):
+        param_name = "ip_adapter.1.to_k_ip.weight"
+        return param_name in state_dict
     def load_stable_diffusion(self, state_dict, components=None, file_path=""):
         component_dict = {
             "text_encoder": SDTextEncoder,
@@ -83,7 +88,7 @@ class ModelManager:
                 self.model[component].to(self.torch_dtype).to(self.device)
             else:
                 self.model[component] = component_dict[component]()
-                self.model[component].load_state_dict(self.model[component].state_dict_converter().from_civitai(state_dict))
+                self.model[component].load_state_dict(self.model[component].state_dict_converter().from_civitai(state_dict),strict=False)
                 self.model[component].to(self.torch_dtype).to(self.device)
             self.model_path[component] = file_path
 
@@ -160,6 +165,133 @@ class ModelManager:
         self.model[component] = model
         self.model_path[component] = file_path
 
+    def load_CLIPImageProcessor(self):
+        component = "clip_image_processor"
+        clip_image_processor = CLIPImageProcessor()
+        self.model[component] = clip_image_processor
+    def load_CLIPImageEncoder(self):
+        component = "image_encoder"
+        image_encoder = CLIPVisionModelWithProjection.from_pretrained('./models/CLIPImageEncoder/').to(
+            self.device, dtype=self.torch_dtype
+        )
+        self.model[component] = image_encoder
+        print('CLIPVisionModelWithProjection loaded')
+    # diffusers/src/diffusers/loaders/unet.py _convert_ip_adapter_image_proj_to_diffusers(self, state_dict):
+    def load_image_projector(self, state_dict):
+        component = "image_projector"
+        updated_state_dict = {}
+        image_projection = None
+
+        if "proj.weight" in state_dict:
+            # IP-Adapter
+            num_image_text_embeds = 4
+            clip_embeddings_dim = state_dict["proj.weight"].shape[-1]
+            cross_attention_dim = state_dict["proj.weight"].shape[0] // 4
+
+            image_projection = ImageProjection(
+                cross_attention_dim=cross_attention_dim,
+                image_embed_dim=clip_embeddings_dim,
+                num_image_text_embeds=num_image_text_embeds,
+            )
+
+            for key, value in state_dict.items():
+                diffusers_name = key.replace("proj", "image_embeds")
+                updated_state_dict[diffusers_name] = value
+
+        elif "proj.3.weight" in state_dict:
+            # IP-Adapter Full
+            clip_embeddings_dim = state_dict["proj.0.weight"].shape[0]
+            cross_attention_dim = state_dict["proj.3.weight"].shape[0]
+
+            image_projection = IPAdapterFullImageProjection(
+                cross_attention_dim=cross_attention_dim, image_embed_dim=clip_embeddings_dim
+            )
+
+            for key, value in state_dict.items():
+                diffusers_name = key.replace("proj.0", "ff.net.0.proj")
+                diffusers_name = diffusers_name.replace("proj.2", "ff.net.2")
+                diffusers_name = diffusers_name.replace("proj.3", "norm")
+                updated_state_dict[diffusers_name] = value
+
+        else:
+            # IP-Adapter Plus
+            num_image_text_embeds = state_dict["latents"].shape[1]
+            embed_dims = state_dict["proj_in.weight"].shape[1]
+            output_dims = state_dict["proj_out.weight"].shape[0]
+            hidden_dims = state_dict["latents"].shape[2]
+            heads = state_dict["layers.0.0.to_q.weight"].shape[0] // 64
+
+            image_projection = IPAdapterPlusImageProjection(
+                embed_dims=embed_dims,
+                output_dims=output_dims,
+                hidden_dims=hidden_dims,
+                heads=heads,
+                num_queries=num_image_text_embeds,
+            )
+
+            for key, value in state_dict.items():
+                diffusers_name = key.replace("0.to", "2.to")
+                diffusers_name = diffusers_name.replace("1.0.weight", "3.0.weight")
+                diffusers_name = diffusers_name.replace("1.0.bias", "3.0.bias")
+                diffusers_name = diffusers_name.replace("1.1.weight", "3.1.net.0.proj.weight")
+                diffusers_name = diffusers_name.replace("1.3.weight", "3.1.net.2.weight")
+
+                if "norm1" in diffusers_name:
+                    updated_state_dict[diffusers_name.replace("0.norm1", "0")] = value
+                elif "norm2" in diffusers_name:
+                    updated_state_dict[diffusers_name.replace("0.norm2", "1")] = value
+                elif "to_kv" in diffusers_name:
+                    v_chunk = value.chunk(2, dim=0)
+                    updated_state_dict[diffusers_name.replace("to_kv", "to_k")] = v_chunk[0]
+                    updated_state_dict[diffusers_name.replace("to_kv", "to_v")] = v_chunk[1]
+                elif "to_out" in diffusers_name:
+                    updated_state_dict[diffusers_name.replace("to_out", "to_out.0")] = value
+                else:
+                    updated_state_dict[diffusers_name] = value
+
+        image_projection.load_state_dict(updated_state_dict)
+        self.model[component] = image_projection.to(self.torch_dtype).to(self.device).eval()
+        print('image_projector loaded')
+    def load_IP_Adapter(self,state_dict):
+        IP_Adapter2Diffuser_map = {'1.to_k_ip.weight': 'down_blocks.0.attentions.0.transformer_blocks.0.attn2.to_k_ip.weight',
+         '1.to_v_ip.weight': 'down_blocks.0.attentions.0.transformer_blocks.0.attn2.to_v_ip.weight',
+         '3.to_k_ip.weight': 'down_blocks.0.attentions.1.transformer_blocks.0.attn2.to_k_ip.weight',
+         '3.to_v_ip.weight': 'down_blocks.0.attentions.1.transformer_blocks.0.attn2.to_v_ip.weight',
+         '5.to_k_ip.weight': 'down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_k_ip.weight',
+         '5.to_v_ip.weight': 'down_blocks.1.attentions.0.transformer_blocks.0.attn2.to_v_ip.weight',
+         '7.to_k_ip.weight': 'down_blocks.1.attentions.1.transformer_blocks.0.attn2.to_k_ip.weight',
+         '7.to_v_ip.weight': 'down_blocks.1.attentions.1.transformer_blocks.0.attn2.to_v_ip.weight',
+         '9.to_k_ip.weight': 'down_blocks.2.attentions.0.transformer_blocks.0.attn2.to_k_ip.weight',
+         '9.to_v_ip.weight': 'down_blocks.2.attentions.0.transformer_blocks.0.attn2.to_v_ip.weight',
+         '11.to_k_ip.weight': 'down_blocks.2.attentions.1.transformer_blocks.0.attn2.to_k_ip.weight',
+         '11.to_v_ip.weight': 'down_blocks.2.attentions.1.transformer_blocks.0.attn2.to_v_ip.weight',
+         '13.to_k_ip.weight': 'up_blocks.1.attentions.0.transformer_blocks.0.attn2.to_k_ip.weight',
+         '13.to_v_ip.weight': 'up_blocks.1.attentions.0.transformer_blocks.0.attn2.to_v_ip.weight',
+         '15.to_k_ip.weight': 'up_blocks.1.attentions.1.transformer_blocks.0.attn2.to_k_ip.weight',
+         '15.to_v_ip.weight': 'up_blocks.1.attentions.1.transformer_blocks.0.attn2.to_v_ip.weight',
+         '17.to_k_ip.weight': 'up_blocks.1.attentions.2.transformer_blocks.0.attn2.to_k_ip.weight',
+         '17.to_v_ip.weight': 'up_blocks.1.attentions.2.transformer_blocks.0.attn2.to_v_ip.weight',
+         '19.to_k_ip.weight': 'up_blocks.2.attentions.0.transformer_blocks.0.attn2.to_k_ip.weight',
+         '19.to_v_ip.weight': 'up_blocks.2.attentions.0.transformer_blocks.0.attn2.to_v_ip.weight',
+         '21.to_k_ip.weight': 'up_blocks.2.attentions.1.transformer_blocks.0.attn2.to_k_ip.weight',
+         '21.to_v_ip.weight': 'up_blocks.2.attentions.1.transformer_blocks.0.attn2.to_v_ip.weight',
+         '23.to_k_ip.weight': 'up_blocks.2.attentions.2.transformer_blocks.0.attn2.to_k_ip.weight',
+         '23.to_v_ip.weight': 'up_blocks.2.attentions.2.transformer_blocks.0.attn2.to_v_ip.weight',
+         '25.to_k_ip.weight': 'up_blocks.3.attentions.0.transformer_blocks.0.attn2.to_k_ip.weight',
+         '25.to_v_ip.weight': 'up_blocks.3.attentions.0.transformer_blocks.0.attn2.to_v_ip.weight',
+         '27.to_k_ip.weight': 'up_blocks.3.attentions.1.transformer_blocks.0.attn2.to_k_ip.weight',
+         '27.to_v_ip.weight': 'up_blocks.3.attentions.1.transformer_blocks.0.attn2.to_v_ip.weight',
+         '29.to_k_ip.weight': 'up_blocks.3.attentions.2.transformer_blocks.0.attn2.to_k_ip.weight',
+         '29.to_v_ip.weight': 'up_blocks.3.attentions.2.transformer_blocks.0.attn2.to_v_ip.weight',
+         '31.to_k_ip.weight': 'mid_block.attentions.0.transformer_blocks.0.attn2.to_k_ip.weight',
+         '31.to_v_ip.weight': 'mid_block.attentions.0.transformer_blocks.0.attn2.to_v_ip.weight'}
+        new_state_dict = {IP_Adapter2Diffuser_map[k]:state_dict[k] for k in state_dict.keys()}
+        self.model["unet"].load_state_dict(self.model["unet"].state_dict_converter().from_diffusers(new_state_dict),strict=False)
+        self.model["unet"].to(self.torch_dtype).to(self.device)
+        self.model["ip_adapter"] = None
+        print('ip_adapter loaded')
+
+
     def search_for_embeddings(self, state_dict):
         embeddings = []
         for k in state_dict:
@@ -199,19 +331,36 @@ class ModelManager:
             self.load_stable_diffusion(state_dict, components=components, file_path=file_path)
         elif self.is_sd_lora(state_dict):
             self.load_sd_lora(state_dict, alpha=lora_alphas.pop(0))
+            print('load_sd_lora: ',file_path)
         elif self.is_beautiful_prompt(state_dict):
             self.load_beautiful_prompt(state_dict, file_path=file_path)
         elif self.is_RIFE(state_dict):
             self.load_RIFE(state_dict, file_path=file_path)
         elif self.is_translator(state_dict):
             self.load_translator(state_dict, file_path=file_path)
+        elif self.is_ip_adapter(state_dict):
+            new_state_dict = {"image_proj": {}, "ip_adapter": {}}
+            for key in state_dict.keys():
+                if key.startswith("image_proj."):
+                    new_state_dict["image_proj"][key.replace("image_proj.", "")] = state_dict[key]
+                elif key.startswith("ip_adapter."):
+                    new_state_dict["ip_adapter"][key.replace("ip_adapter.", "")] = state_dict[key]
+            self.load_IP_Adapter(new_state_dict['ip_adapter'])
+            self.load_image_projector(new_state_dict['image_proj'])
 
     def load_models(self, file_path_list, lora_alphas=[]):
         for file_path in file_path_list:
             self.load_model(file_path, lora_alphas=lora_alphas)
-        
+        if 'ip_adapter' in self.model:
+            self.load_CLIPImageEncoder()
+            self.load_CLIPImageProcessor()
+            #self.load_image_projector() in load ip_adapter
+
+
     def to(self, device):
         for component in self.model:
+            if self.model[component] is None or isinstance(self.model[component],CLIPImageProcessor):
+                continue
             if isinstance(self.model[component], list):
                 for model in self.model[component]:
                     model.to(device)
@@ -219,7 +368,7 @@ class ModelManager:
                 self.model[component].to(device)
         torch.cuda.empty_cache()
 
-    def get_model_with_model_path(self, model_path):
+    def get_model_with_model_path(self, model_path):    # only for fetch_controlnet_models
         for component in self.model_path:
             if isinstance(self.model_path[component], str):
                 if os.path.samefile(self.model_path[component], model_path):

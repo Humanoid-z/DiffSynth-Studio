@@ -14,7 +14,7 @@ def low_version_attention(query, key, value, attn_bias=None):
 
 class Attention(torch.nn.Module):
 
-    def __init__(self, q_dim, num_heads, head_dim, kv_dim=None, bias_q=False, bias_kv=False, bias_out=False):
+    def __init__(self, q_dim, num_heads, head_dim, kv_dim=None, bias_q=False, bias_kv=False, bias_out=False,use_IP_Adapter=False):
         super().__init__()
         dim_inner = head_dim * num_heads
         kv_dim = kv_dim if kv_dim is not None else q_dim
@@ -26,10 +26,20 @@ class Attention(torch.nn.Module):
         self.to_v = torch.nn.Linear(kv_dim, dim_inner, bias=bias_kv)
         self.to_out = torch.nn.Linear(dim_inner, q_dim, bias=bias_out)
 
+        # IP-Adapter
+        self.use_IP_Adapter = use_IP_Adapter
+        if use_IP_Adapter:
+            self.scale = 0.45
+            self.num_tokens = 16 # The context length of the image features. defaults to 4 when do ip_adapter_plus it should be 16
+            self.to_k_ip = torch.nn.Linear(kv_dim, dim_inner, bias=False)
+            self.to_v_ip = torch.nn.Linear(kv_dim, dim_inner, bias=False)
+
     def torch_forward(self, hidden_states, encoder_hidden_states=None, attn_mask=None):
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
-
+        elif self.use_IP_Adapter:
+            # get encoder_hidden_states, ip_hidden_states
+            encoder_hidden_states, ip_hidden_states = encoder_hidden_states
         batch_size = encoder_hidden_states.shape[0]
 
         q = self.to_q(hidden_states)
@@ -43,6 +53,16 @@ class Attention(torch.nn.Module):
         hidden_states = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, self.num_heads * self.head_dim)
         hidden_states = hidden_states.to(q.dtype)
+
+        if self.use_IP_Adapter:
+            ip_k = self.to_k_ip(ip_hidden_states)
+            ip_v = self.to_v_ip(ip_hidden_states)
+            ip_k = ip_k.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+            ip_v = ip_v.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+            ip_hidden_states = torch.nn.functional.scaled_dot_product_attention(q, ip_k, ip_v)
+            ip_hidden_states = ip_hidden_states.transpose(1, 2).reshape(batch_size, -1, self.num_heads * self.head_dim)
+            ip_hidden_states = ip_hidden_states.to(q.dtype)
+            hidden_states = hidden_states + self.scale * ip_hidden_states
 
         hidden_states = self.to_out(hidden_states)
 

@@ -30,7 +30,7 @@ class GEGLU(torch.nn.Module):
 
 class BasicTransformerBlock(torch.nn.Module):
 
-    def __init__(self, dim, num_attention_heads, attention_head_dim, cross_attention_dim):
+    def __init__(self, dim, num_attention_heads, attention_head_dim, cross_attention_dim,use_ip_adapter=False):
         super().__init__()
 
         # 1. Self-Attn
@@ -39,12 +39,13 @@ class BasicTransformerBlock(torch.nn.Module):
 
         # 2. Cross-Attn
         self.norm2 = torch.nn.LayerNorm(dim, elementwise_affine=True)
-        self.attn2 = Attention(q_dim=dim, kv_dim=cross_attention_dim, num_heads=num_attention_heads, head_dim=attention_head_dim, bias_out=True)
+        self.attn2 = Attention(q_dim=dim, kv_dim=cross_attention_dim, num_heads=num_attention_heads, head_dim=attention_head_dim, bias_out=True,use_IP_Adapter=use_ip_adapter)
 
         # 3. Feed-forward
         self.norm3 = torch.nn.LayerNorm(dim, elementwise_affine=True)
         self.act_fn = GEGLU(dim, dim * 4)
         self.ff = torch.nn.Linear(dim * 4, dim)
+
 
 
     def forward(self, hidden_states, encoder_hidden_states):
@@ -125,7 +126,7 @@ class ResnetBlock(torch.nn.Module):
 
 class AttentionBlock(torch.nn.Module):
 
-    def __init__(self, num_attention_heads, attention_head_dim, in_channels, num_layers=1, cross_attention_dim=None, norm_num_groups=32, eps=1e-5, need_proj_out=True):
+    def __init__(self, num_attention_heads, attention_head_dim, in_channels, num_layers=1, cross_attention_dim=None, norm_num_groups=32, eps=1e-5, need_proj_out=True,use_ip_adapter=False):
         super().__init__()
         inner_dim = num_attention_heads * attention_head_dim
 
@@ -137,7 +138,8 @@ class AttentionBlock(torch.nn.Module):
                 inner_dim,
                 num_attention_heads,
                 attention_head_dim,
-                cross_attention_dim=cross_attention_dim
+                cross_attention_dim=cross_attention_dim,
+                use_ip_adapter=use_ip_adapter
             )
             for d in range(num_layers)
         ])
@@ -233,32 +235,32 @@ class SDUNet(torch.nn.Module):
             torch.nn.Linear(1280, 1280)
         )
         self.conv_in = torch.nn.Conv2d(4, 320, kernel_size=3, padding=1)
-
+        use_ip_adapter = True
         self.blocks = torch.nn.ModuleList([
             # CrossAttnDownBlock2D
             ResnetBlock(320, 320, 1280),
-            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6),
+            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6, use_ip_adapter=use_ip_adapter),
             PushBlock(),
             ResnetBlock(320, 320, 1280),
-            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6),
+            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6, use_ip_adapter=use_ip_adapter),
             PushBlock(),
             DownSampler(320),
             PushBlock(),
             # CrossAttnDownBlock2D
             ResnetBlock(320, 640, 1280),
-            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6),
+            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PushBlock(),
             ResnetBlock(640, 640, 1280),
-            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6),
+            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PushBlock(),
             DownSampler(640),
             PushBlock(),
             # CrossAttnDownBlock2D
             ResnetBlock(640, 1280, 1280),
-            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6),
+            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PushBlock(),
             ResnetBlock(1280, 1280, 1280),
-            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6),
+            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PushBlock(),
             DownSampler(1280),
             PushBlock(),
@@ -269,7 +271,7 @@ class SDUNet(torch.nn.Module):
             PushBlock(),
             # UNetMidBlock2DCrossAttn
             ResnetBlock(1280, 1280, 1280),
-            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6),
+            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             ResnetBlock(1280, 1280, 1280),
             # UpBlock2D
             PopBlock(),
@@ -282,35 +284,35 @@ class SDUNet(torch.nn.Module):
             # CrossAttnUpBlock2D
             PopBlock(),
             ResnetBlock(2560, 1280, 1280),
-            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6),
+            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PopBlock(),
             ResnetBlock(2560, 1280, 1280),
-            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6),
+            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PopBlock(),
             ResnetBlock(1920, 1280, 1280),
-            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6),
+            AttentionBlock(8, 160, 1280, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             UpSampler(1280),
             # CrossAttnUpBlock2D
             PopBlock(),
             ResnetBlock(1920, 640, 1280),
-            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6),
+            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PopBlock(),
             ResnetBlock(1280, 640, 1280),
-            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6),
+            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PopBlock(),
             ResnetBlock(960, 640, 1280),
-            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6),
+            AttentionBlock(8, 80, 640, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             UpSampler(640),
             # CrossAttnUpBlock2D
             PopBlock(),
             ResnetBlock(960, 320, 1280),
-            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6),
+            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PopBlock(),
             ResnetBlock(640, 320, 1280),
-            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6),
+            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
             PopBlock(),
             ResnetBlock(640, 320, 1280),
-            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6),
+            AttentionBlock(8, 40, 320, 1, 768, eps=1e-6,use_ip_adapter=use_ip_adapter),
         ])
 
         self.conv_norm_out = torch.nn.GroupNorm(num_channels=320, num_groups=32, eps=1e-5)

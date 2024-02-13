@@ -22,6 +22,11 @@ def lets_dance(
     device = "cuda",
     vram_limit_level = 0,
 ):
+    # assert isinstance(encoder_hidden_states, tuple)
+    if isinstance(encoder_hidden_states, tuple):  # for ip_hidden_states
+        text_emb,ip_emb = encoder_hidden_states
+    else:
+        text_emb = encoder_hidden_states
     # 1. ControlNet
     #     This part will be repeated on overlapping frames if animatediff_batch_size > animatediff_stride.
     #     I leave it here because I intend to do something interesting on the ControlNets.
@@ -34,7 +39,7 @@ def lets_dance(
             res_stack = controlnet(
                 sample[batch_id: batch_id_],
                 timestep,
-                encoder_hidden_states[batch_id: batch_id_],
+                text_emb[batch_id: batch_id_],  # only input text_emb in controlnet because of https://github.com/tencent-ailab/IP-Adapter/blob/main/ip_adapter/attention_processor.py#L442
                 controlnet_frames[:, batch_id: batch_id_],
                 tiled=tiled, tile_size=tile_size, tile_stride=tile_stride
             )
@@ -56,29 +61,35 @@ def lets_dance(
     # 3. pre-process
     height, width = sample.shape[2], sample.shape[3]
     hidden_states = unet.conv_in(sample)
-    text_emb = encoder_hidden_states
     res_stack = [hidden_states.cpu() if vram_limit_level>=1 else hidden_states]
 
     # 4. blocks
     for block_id, block in enumerate(unet.blocks):
         # 4.1 UNet
         if isinstance(block, PushBlock):
-            hidden_states, time_emb, text_emb, res_stack = block(hidden_states, time_emb, text_emb, res_stack)
+            hidden_states, time_emb, encoder_hidden_states, res_stack = block(hidden_states, time_emb, encoder_hidden_states, res_stack)
             if vram_limit_level>=1:
                 res_stack[-1] = res_stack[-1].cpu()
         elif isinstance(block, PopBlock):
             if vram_limit_level>=1:
                 res_stack[-1] = res_stack[-1].to(device)
-            hidden_states, time_emb, text_emb, res_stack = block(hidden_states, time_emb, text_emb, res_stack)
+            hidden_states, time_emb, encoder_hidden_states, res_stack = block(hidden_states, time_emb, encoder_hidden_states, res_stack)
         else:
             hidden_states_input = hidden_states
             hidden_states_output = []
             for batch_id in range(0, sample.shape[0], unet_batch_size):
                 batch_id_ = min(batch_id + unet_batch_size, sample.shape[0])
+                if isinstance(encoder_hidden_states, tuple):
+                    current_encoder_hidden_states = (
+                        text_emb[batch_id: batch_id_],
+                        ip_emb[batch_id: batch_id_]
+                    )
+                else:
+                    current_encoder_hidden_states = text_emb[batch_id: batch_id_]
                 hidden_states, _, _, _ = block(
                     hidden_states_input[batch_id: batch_id_],
                     time_emb,
-                    text_emb[batch_id: batch_id_],
+                    current_encoder_hidden_states,
                     res_stack,
                     cross_frame_attention=cross_frame_attention,
                     tiled=tiled, tile_size=tile_size, tile_stride=tile_stride
