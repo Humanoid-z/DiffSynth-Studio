@@ -22,8 +22,12 @@ def download_model(url, file_path):
 # download_model("https://huggingface.co/lllyasviel/Annotators/resolve/main/sk_model.pth", "models/Annotators/sk_model.pth")
 # download_model("https://huggingface.co/lllyasviel/Annotators/resolve/main/sk_model2.pth", "models/Annotators/sk_model2.pth")
 # download_model("https://civitai.com/api/download/models/25820?type=Model&format=PickleTensor&size=full&fp=fp16", "models/textual_inversion/verybadimagenegative_v1.3.pt")
-
-
 # download_model("https://civitai.com/api/download/models/66246", "models/lora/bocchi_style_offset.safetensors")
-download_model("http://hf-mirror.com/h94/IP-Adapter/blob/main/models/image_encoder/model.safetensors", "models/CLIPImageEncoder/model.safetensors")
-download_model("http://hf-mirror.com/h94/IP-Adapter/blob/main/models/image_encoder/config.json", "models/CLIPImageEncoder/config.json")
+
+# download_model("https://civitai.com/api/download/models/25820?type=Model&format=PickleTensor&size=full&fp=fp16", "models/textual_inversion/verybadimagenegative_v1.3.pt")
+# download_model("https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors?download=true", "models/stable_diffusion/v1-5-pruned-emaonly.safetensors")
+# download_model("https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-plus_sd15.safetensors?download=true", "models/Adapter/ip-adapter-plus_sd15.safetensors")
+download_model("https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors?download=true", "models/CLIPImageEncoder/model.safetensors")
+download_model("https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/config.json?download=true", "models/CLIPImageEncoder/config.json")
+
+download_model("https://civitai.com/api/download/models/108545?type=Model&format=SafeTensor&size=pruned&fp=fp16", "models/stable_diffusion/mistoon_anime.safetensors")

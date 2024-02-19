@@ -29,7 +29,7 @@ class Attention(torch.nn.Module):
         # IP-Adapter
         self.use_IP_Adapter = use_IP_Adapter
         if use_IP_Adapter:
-            self.scale = 0.45
+            self.scale = 0.45   #0.45
             self.num_tokens = 16 # The context length of the image features. defaults to 4 when do ip_adapter_plus it should be 16
             self.to_k_ip = torch.nn.Linear(kv_dim, dim_inner, bias=False)
             self.to_v_ip = torch.nn.Linear(kv_dim, dim_inner, bias=False)

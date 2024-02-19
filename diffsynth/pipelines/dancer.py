@@ -109,7 +109,7 @@ def lets_dance(
             hidden_states += additional_res_stack.pop().to(device)
             if vram_limit_level>=1:
                 res_stack = [(res.to(device) + additional_res.to(device)).cpu() for res, additional_res in zip(res_stack, additional_res_stack)]
-            else:
+            else:   # controlnet 的每一个block的输出加到对应的encoder的输出，一起传到decoder的每个block
                 res_stack = [res + additional_res for res, additional_res in zip(res_stack, additional_res_stack)]
     
     # 5. output

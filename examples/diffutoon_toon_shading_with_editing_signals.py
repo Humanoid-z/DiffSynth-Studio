@@ -84,7 +84,7 @@ config_stage_1 = {
             "cfg_scale": 7.0,
             "clip_skip": 1,
             "denoising_strength": 0.9,
-            "num_inference_steps": 20,
+            "num_inference_steps": 10,  #20
             "animatediff_batch_size": 8,
             "animatediff_stride": 4,
             "unet_batch_size": 8,

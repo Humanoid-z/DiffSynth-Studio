@@ -164,7 +164,10 @@ class AttentionBlock(torch.nn.Module):
 
         if cross_frame_attention:
             hidden_states = hidden_states.reshape(1, batch * height * width, inner_dim)
-            encoder_hidden_states = text_emb.mean(dim=0, keepdim=True)
+            if isinstance(text_emb, tuple):
+                encoder_hidden_states = (text_emb[0].mean(dim=0, keepdim=True),text_emb[1].mean(dim=0, keepdim=True))
+            else:
+                encoder_hidden_states = text_emb.mean(dim=0, keepdim=True)
         else:
             encoder_hidden_states = text_emb
 

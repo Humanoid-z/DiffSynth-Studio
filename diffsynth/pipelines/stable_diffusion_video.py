@@ -1,3 +1,4 @@
+import math
 
 from diffusers.loaders import IPAdapterMixin
 from diffusers.models import ImageProjection
@@ -56,13 +57,20 @@ def lets_dance_with_long_video(
             controlnet_frames[:, batch_id: batch_id_].to(device) if controlnet_frames is not None else None,
             unet_batch_size=unet_batch_size, controlnet_batch_size=controlnet_batch_size,
             cross_frame_attention=cross_frame_attention,
-            device=device, vram_limit_level=vram_limit_level
+            device=device, vram_limit_level=vram_limit_level,
         ).cpu()
 
         # update hidden_states
         # 平滑化
         for i, hidden_states_updated in zip(range(batch_id, batch_id_), hidden_states_batch):
-            bias = max(1 - abs(i - (batch_id + batch_id_ - 1) / 2) / ((batch_id_ - batch_id - 1 + 1e-2) / 2), 1e-2)
+
+            # bias = max(1 - abs(i - (batch_id + batch_id_ - 1) / 2) / ((batch_id_ - batch_id - 1 + 1e-2) / 2), 1e-2)
+            sigma = (batch_id_ - batch_id - 1) / 2
+            sigma *= 0.5    # 0.5
+            distance = (i -(batch_id + batch_id_ - 1) / 2)**2
+            bias = max(math.exp(- distance / (2 * sigma ** 2 + 1e-2)),1e-2)
+            # bias = max(1 - (batch_id_ - i) / ((batch_id_ - batch_id + 1e-2) ), 1e-2)
+            # bias = max((batch_id_ - i) / (batch_id_ - batch_id + 1e-2), 1e-2)
 
             hidden_states, num = hidden_states_output[i]
             hidden_states = hidden_states * (num / (num + bias)) + hidden_states_updated * (bias / (num + bias))
@@ -153,7 +161,7 @@ class SDVideoPipeline(torch.nn.Module):
         image = image.cpu().permute(1, 2, 0).numpy()
         image = Image.fromarray(((image / 2 + 0.5).clip(0, 1) * 255).astype("uint8"))
         return image
-    
+
 
     def decode_images(self, latents, tiled=False, tile_size=64, tile_stride=32):
         images = [
@@ -161,7 +169,7 @@ class SDVideoPipeline(torch.nn.Module):
             for frame_id in range(latents.shape[0])
         ]
         return images
-    
+
 
     def encode_images(self, processed_images, tiled=False, tile_size=64, tile_stride=32):
         latents = []
@@ -231,9 +239,6 @@ class SDVideoPipeline(torch.nn.Module):
             latents = self.scheduler.add_noise(latents, noise, timestep=self.scheduler.timesteps[0])
         #latents.shape [30 (frame), 4(vae channel), 128(height//8), 128(width//8)]
         # Encode prompts  CLIP text encoder编码
-
-
-
         print(prompt)
         prompt_emb_posi = self.prompter.encode_prompt(self.text_encoder, prompt, clip_skip=clip_skip, device=self.device, positive=True).cpu()
         prompt_emb_nega = self.prompter.encode_prompt(self.text_encoder, negative_prompt, clip_skip=clip_skip, device=self.device, positive=False).cpu()
@@ -246,6 +251,7 @@ class SDVideoPipeline(torch.nn.Module):
             image_embeds,negative_image_embeds = self.get_image_embeds(ip_adapter_image) # 注意shape
             image_embeds = image_embeds.repeat(num_frames, 1, 1)
             negative_image_embeds = negative_image_embeds.repeat(num_frames, 1, 1)
+            # prompt_emb.shape [(frame), 16(CLIP Vision token 16 length), 768 (clip emb dim)]
             prompt_emb_posi = (prompt_emb_posi, image_embeds)
             prompt_emb_nega = (prompt_emb_nega, negative_image_embeds)
         # prompt_emb.shape [30(frame), 77(token truncat to 77 length), 768 (clip emb dim)]

@@ -108,7 +108,7 @@ class SDControlNet(torch.nn.Module):
         hidden_states = self.conv_in(sample) + self.controlnet_conv_in(conditioning)
         text_emb = encoder_hidden_states
         res_stack = [hidden_states]
-
+        # res_stack会在PushBlock append上一个模块的输出
         # 3. blocks
         for i, block in enumerate(self.blocks):
             if tiled and not isinstance(block, PushBlock):

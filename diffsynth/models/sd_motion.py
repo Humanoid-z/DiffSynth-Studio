@@ -9,7 +9,7 @@ class TemporalTransformerBlock(torch.nn.Module):
         super().__init__()
 
         # 1. Self-Attn
-        self.pe1 = torch.nn.Parameter(torch.zeros(1, max_position_embeddings, dim))
+        self.pe1 = torch.nn.Parameter(torch.zeros(1, max_position_embeddings, dim)) # 帧数的位置编码
         self.norm1 = torch.nn.LayerNorm(dim, elementwise_affine=True)
         self.attn1 = Attention(q_dim=dim, num_heads=num_attention_heads, head_dim=attention_head_dim, bias_out=True)
 

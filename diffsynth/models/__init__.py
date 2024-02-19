@@ -46,7 +46,9 @@ class ModelManager:
         param_name = "model.diffusion_model.output_blocks.9.1.transformer_blocks.0.norm3.weight"
         return param_name in state_dict
     
-    def is_controlnet(self, state_dict):
+    def is_controlnet(self, state_dict,file_path=None):
+        if file_path == 'models/ControlNet/control_v11p_sd15_softedge.fp16.safetensors':
+            return True
         param_name = "control_model.time_embed.0.weight"
         return param_name in state_dict
     
@@ -120,7 +122,10 @@ class ModelManager:
             self.model[component] = []
             self.model_path[component] = []
         model = SDControlNet()
-        model.load_state_dict(model.state_dict_converter().from_civitai(state_dict))
+        if file_path == 'models/ControlNet/control_v11p_sd15_softedge.fp16.safetensors':
+            model.load_state_dict(model.state_dict_converter().from_diffusers(state_dict))
+        else:
+            model.load_state_dict(model.state_dict_converter().from_civitai(state_dict))
         model.to(self.torch_dtype).to(self.device)
         self.model[component].append(model)
         self.model_path[component].append(file_path)
@@ -323,7 +328,7 @@ class ModelManager:
         state_dict = load_state_dict(file_path, torch_dtype=self.torch_dtype)
         if self.is_animatediff(state_dict):
             self.load_animatediff(state_dict, file_path=file_path)
-        elif self.is_controlnet(state_dict):
+        elif self.is_controlnet(state_dict,file_path):
             self.load_controlnet(state_dict, file_path=file_path)
         elif self.is_stabe_diffusion_xl(state_dict):
             self.load_stable_diffusion_xl(state_dict, components=components, file_path=file_path)

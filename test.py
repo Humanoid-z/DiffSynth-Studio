@@ -1,4 +1,6 @@
 import torch
+from PIL import Image
+from controlnet_aux import DWposeDetector
 from safetensors import safe_open
 # from diffusers import StableDiffusionPipeline
 from transformers import CLIPVisionModelWithProjection
@@ -18,13 +20,17 @@ from transformers import CLIPVisionModelWithProjection
 # print(state_dict["ip_adapter"].keys())
 # print(len(state_dict["ip_adapter"].keys()))     # 16 layers
 
-ckpt = 'models/stable_diffusion/aingdiffusion_v12.safetensors'
-# ckpt = 'models/stable_diffusion/v1-5-pruned-emaonly.safetensors'
+# ckpt = 'models/stable_diffusion/aingdiffusion_v12.safetensors'
+ckpt = 'models/ControlNet/control_v11p_sd15_softedge.fp16.safetensors'
 state_dict = {}
 with safe_open(ckpt, framework="pt", device="cpu") as f:
     for key in f.keys():
         print(key)
-#         state_dict[key] = f.get_tensor(key)
+        # state_dict[key] = f.get_tensor(key)
+# pose_image = Image.open('data/examples/pose.JPG')
+# processor = DWposeDetector().to("cuda")
+# out = processor(pose_image)
+
 # print(state_dict.keys())
 
 # from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
